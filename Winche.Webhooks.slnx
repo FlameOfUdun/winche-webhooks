@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Winche.Webhooks/Winche.Webhooks.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Winche.Webhooks.Tests/Winche.Webhooks.Tests.csproj" />
+  </Folder>
+</Solution>
