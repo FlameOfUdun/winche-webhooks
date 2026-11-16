@@ -14,6 +14,12 @@ Database, storage and Winche Auth publish their own changes (Winche.Core's `Winc
 | Winche.Storage (`PublishChanges()`) | uploaded, deleted, metadataUpdated |
 | Winche.Auth (always) | created, deleted, disabled, enabled, claimsChanged, signedIn |
 
+## Install
+
+```sh
+dotnet add package Winche.Webhooks
+```
+
 ## Setup
 
 ```csharp
