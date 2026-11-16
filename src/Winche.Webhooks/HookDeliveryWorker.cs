@@ -113,7 +113,7 @@ internal sealed class HookDeliveryWorker(HookOutbox outbox, HookRunner runner, H
         {
             try
             {
-                var batch = await outbox.ClaimAsync(20, time.GetUtcNow(), stoppingToken);
+                var batch = await outbox.ClaimAsync(20, time.GetUtcNow(), stoppingToken, options.ClaimLease);
                 await Parallel.ForEachAsync(batch, new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = stoppingToken }, (d, ct) => new ValueTask(SendAsync(d, ct)));
                 if (time.GetUtcNow() - _pruned > TimeSpan.FromHours(1))
                 {
@@ -135,7 +135,11 @@ internal sealed class HookDeliveryWorker(HookOutbox outbox, HookRunner runner, H
         var now = time.GetUtcNow();
         if (events.All.FirstOrDefault(h => h.Id == d.HookId) is not { } hook)
         {
-            await outbox.RecordAsync(d.Id, HookOutbox.Failed, attempts, null, now, null, "The hook was removed.", 0, ct);
+            // Just saved (or deployed) on another server, and this one hasn't caught up: back in the queue for a moment,
+            // not an attempt. Only an old delivery's hook is really gone.
+            if (now - d.CreatedAt < TimeSpan.FromMinutes(1))
+                await outbox.RecordAsync(d.Id, HookOutbox.Pending, d.Attempts, now + TimeSpan.FromSeconds(2), null, d.LastStatus, d.LastResult, d.DurationMs ?? 0, ct);
+            else await outbox.RecordAsync(d.Id, HookOutbox.Failed, attempts, null, now, null, "The hook was removed.", 0, ct);
             return;
         }
         if (!hook.Enabled)
@@ -143,7 +147,21 @@ internal sealed class HookDeliveryWorker(HookOutbox outbox, HookRunner runner, H
             await outbox.RecordAsync(d.Id, HookOutbox.Failed, attempts, null, now, null, "The hook is turned off.", 0, ct);
             return;
         }
-        var result = await runner.RunAsync(hook, d.Event, ct);
+        // A long run (a function) keeps its claim: renewed every third of the lease while it runs.
+        using var renewing = new CancellationTokenSource();
+        var renew = Task.Run(async () =>
+        {
+            var every = options.ClaimLease / 3;
+            while (!renewing.IsCancellationRequested)
+            {
+                try { await Task.Delay(every, time, renewing.Token); } catch (OperationCanceledException) { return; }
+                try { await outbox.RenewAsync(d.Id, time.GetUtcNow() + options.ClaimLease, CancellationToken.None); }
+                catch (Exception ex) { logger.LogWarning(ex, "Couldn't keep the claim on delivery {Id}.", d.Id); }
+            }
+        }, CancellationToken.None);
+        HookAttempt result;
+        try { result = await runner.RunAsync(hook, d.Event, ct); }
+        finally { renewing.Cancel(); await renew; }
         now = time.GetUtcNow();
         if (result.Ok) await outbox.RecordAsync(d.Id, HookOutbox.Delivered, attempts, null, now, result.Status, result.Result, result.DurationMs, ct);
         else if (result.Retry && attempts <= Backoff.Length)

@@ -22,7 +22,7 @@ public class HooksTests(PostgresFixture pg)
 {
     private const string MasterKey = "webhooks-tests-master-key-0123456789abcdef";
 
-    private static async Task<IHost> StartAsync(string db, MemoryArchive archive)
+    private static async Task<IHost> StartAsync(string db, MemoryArchive archive, TimeSpan? claimLease = null)
     {
         var b = Host.CreateApplicationBuilder();
         b.Services.AddWincheConfig(o => { o.ConnectionString = db; o.MasterKey = MasterKey; });
@@ -31,6 +31,7 @@ public class HooksTests(PostgresFixture pg)
             o.ConnectionString = db;
             o.PollInterval = TimeSpan.FromMilliseconds(50);
             o.RetryDelays = [TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(100)];
+            if (claimLease is { } lease) o.ClaimLease = lease;
         });
         b.Services.AddWincheDatabase(o =>
         {
@@ -101,6 +102,54 @@ public class HooksTests(PostgresFixture pg)
         var delivery = Assert.Single(await outbox.ListAsync("visits"));
         Assert.Equal((2, 200), (delivery.Attempts, delivery.LastStatus));
         await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task A_delivery_that_runs_longer_than_its_claim_keeps_it_and_runs_once_across_servers()
+    {
+        await using var receiver = await Receiver.StartAsync();
+        receiver.Delay = TimeSpan.FromSeconds(3);   // five times the claim below
+        var db = await pg.NewDatabaseAsync();
+        using var a = await StartAsync(db, new MemoryArchive(), TimeSpan.FromMilliseconds(600));
+        using var b = await StartAsync(db, new MemoryArchive(), TimeSpan.FromMilliseconds(600));
+        await SaveAsync(a, new HookSettings
+        {
+            Id = "slow", Name = "Slow", When = new HookTrigger { Source = "database", Events = ["created"], Path = "jobs/{id}" },
+            Do = new HookActionSettings { Url = receiver.Url },
+        });
+        await Until(() => Task.FromResult(b.Services.GetRequiredService<HookEvents>().All.Any(h => h.Id == "slow")), "the other server to know the hook");
+        await a.Services.GetRequiredService<DocumentDatabase>().WriteAsync([new SetWrite { Path = "jobs/j1", Fields = Fields(("n", new IntegerValue(1))) }]);
+
+        var outbox = a.Services.GetRequiredService<HookOutbox>();
+        // The other server may claim it before it knows the hook just saved: it waits, it doesn't fail it.
+        await Until(async () => (await outbox.ListAsync("slow")).FirstOrDefault()?.Status == HookOutbox.Delivered, "the slow delivery");
+        await Task.Delay(1500);   // time for a second server to have taken it, if it could
+        Assert.Single(receiver.Got);
+        Assert.Equal(1, Assert.Single(await outbox.ListAsync("slow")).Attempts);
+        await a.StopAsync();
+        await b.StopAsync();
+    }
+
+    [Fact]
+    public async Task A_server_that_hasnt_caught_up_with_a_new_hook_waits_for_it_instead_of_failing_the_delivery()
+    {
+        await using var receiver = await Receiver.StartAsync();
+        var db = await pg.NewDatabaseAsync();
+        using var a = await StartAsync(db, new MemoryArchive());
+        using var b = await StartAsync(db, new MemoryArchive());
+        await SaveAsync(a, new HookSettings
+        {
+            Id = "fresh", Name = "Fresh", When = new HookTrigger { Source = "database", Events = ["created"], Path = "jobs/{id}" },
+            Do = new HookActionSettings { Url = receiver.Url },
+        });
+        await a.StopAsync();   // only b sends, and it doesn't know the hook yet
+        Assert.DoesNotContain(b.Services.GetRequiredService<HookEvents>().All, h => h.Id == "fresh");
+        await b.Services.GetRequiredService<DocumentDatabase>().WriteAsync([new SetWrite { Path = "jobs/j1", Fields = Fields(("n", new IntegerValue(1))) }]);
+
+        var outbox = b.Services.GetRequiredService<HookOutbox>();
+        await Until(async () => (await outbox.ListAsync("fresh")).FirstOrDefault()?.Status == HookOutbox.Delivered, "the delivery once b knows the hook");
+        Assert.Single(receiver.Got);
+        await b.StopAsync();
     }
 
     [Fact]

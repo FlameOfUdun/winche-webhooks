@@ -41,6 +41,8 @@ public sealed class Receiver : IAsyncDisposable
     public string Url { get; private set; } = "";
     public ConcurrentQueue<(string Body, string? Signature, string? Event)> Got { get; } = new();
     public ConcurrentQueue<int> Answers { get; } = new();
+    /// <summary>How long it takes to answer (a slow receiver).</summary>
+    public TimeSpan Delay { get; set; }
 
     private Receiver(WebApplication app) => _app = app;
 
@@ -54,6 +56,7 @@ public sealed class Receiver : IAsyncDisposable
         app.MapPost("/hook", async (HttpRequest req) =>
         {
             var body = await new StreamReader(req.Body).ReadToEndAsync();
+            if (r.Delay > TimeSpan.Zero) await Task.Delay(r.Delay);
             r.Got.Enqueue((body, req.Headers["Winche-Signature"], req.Headers["Winche-Event"]));
             return Results.StatusCode(r.Answers.TryDequeue(out var s) ? s : 200);
         });

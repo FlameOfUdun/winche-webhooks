@@ -10,6 +10,12 @@ public sealed class WincheHooksOptions
     /// <summary>How long a webhook may take to answer (default 15 seconds).</summary>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(15);
 
+    /// <summary>
+    /// How long a claimed delivery stays with the server that took it (default 5 minutes). It's renewed while the
+    /// delivery runs, however long that is; if the server dies, another takes it once the claim runs out.
+    /// </summary>
+    public TimeSpan ClaimLease { get; set; } = TimeSpan.FromMinutes(5);
+
     /// <summary>How often each server looks for deliveries that are due (default 1 second).</summary>
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
 

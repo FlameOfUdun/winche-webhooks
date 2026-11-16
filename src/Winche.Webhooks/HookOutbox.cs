@@ -79,17 +79,27 @@ public sealed class HookOutbox([FromKeyedServices(HookOutbox.DataSourceKey)] Npg
     }
 
     /// <summary>Claims up to <paramref name="max"/> due deliveries for this server (others see them again after a few minutes if it dies).</summary>
-    internal async Task<IReadOnlyList<HookDelivery>> ClaimAsync(int max, DateTimeOffset now, CancellationToken ct)
+    internal async Task<IReadOnlyList<HookDelivery>> ClaimAsync(int max, DateTimeOffset now, CancellationToken ct, TimeSpan? lease = null)
     {
         await using var cmd = db.CreateCommand($"""
-            UPDATE winche_hook_deliveries SET next_attempt_at = $2 + interval '5 minutes'
+            UPDATE winche_hook_deliveries SET next_attempt_at = $3
             WHERE id IN (SELECT id FROM winche_hook_deliveries WHERE status = 'pending' AND next_attempt_at <= $2
                          ORDER BY next_attempt_at LIMIT $1 FOR UPDATE SKIP LOCKED)
             RETURNING {Columns}
             """);
         cmd.Parameters.AddWithValue(max);
         cmd.Parameters.AddWithValue(now);
+        cmd.Parameters.AddWithValue(now + (lease ?? TimeSpan.FromMinutes(5)));
         return await ReadAsync(cmd, ct);
+    }
+
+    /// <summary>Keeps a running delivery's claim: no other server takes it before <paramref name="until"/>.</summary>
+    internal async Task RenewAsync(Guid id, DateTimeOffset until, CancellationToken ct)
+    {
+        await using var cmd = db.CreateCommand("UPDATE winche_hook_deliveries SET next_attempt_at = $2 WHERE id = $1 AND status = 'pending'");
+        cmd.Parameters.AddWithValue(id);
+        cmd.Parameters.AddWithValue(until);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     internal async Task RecordAsync(Guid id, string status, int attempts, DateTimeOffset? next, DateTimeOffset? finished, int? httpStatus, string? result, int durationMs, CancellationToken ct)
