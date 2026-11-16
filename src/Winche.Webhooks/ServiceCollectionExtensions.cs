@@ -41,6 +41,7 @@ public static class ServiceCollectionExtensions
         configure(options);
         if (string.IsNullOrWhiteSpace(options.ConnectionString)) throw new InvalidOperationException("Winche.Webhooks: set ConnectionString.");
         services.AddSingleton(options);
+        Winche.Secrets.SecretsServiceCollectionExtensions.AddWincheSecrets(services);   // signing secrets of hooks
         services.AddNpgsqlDataSource(options.ConnectionString, serviceKey: HookOutbox.DataSourceKey);
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton(sp => new HookCatalog(sp.GetServices<WincheChangeSource>(), sp.GetServices<IWincheAction>()));

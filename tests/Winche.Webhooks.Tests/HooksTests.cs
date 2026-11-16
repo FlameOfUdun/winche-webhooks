@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Winche.Auth;
 using Winche.Auth.DependencyInjection;
 using Winche.Core;
+using Winche.Secrets;
 using Winche.Database.DependencyInjection;
 using Winche.Database.Runtime;
 using Winche.Database.Runtime.Writes;
