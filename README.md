@@ -68,6 +68,13 @@ the same queue and are retried the same way.
 Hooks saved before 1.0 with a ready-made action (delete documents, delete files, copy claims) are dropped when the app
 starts, with a version in the hooks' history saying so: write a function for them.
 
+## Upgrading to 2.0
+
+- **Breaking:** hooks' signing secrets are kept by [Winche.Secrets](https://github.com/FlameOfUdun/winche-secrets) instead of Winche.Core (Core 2.0); `AddWincheHooks` adds
+  the store. Saved secrets read as before.
+- A delivery being run keeps its claim, so no second server runs it too; a hook another server has just saved is waited
+  for, not failed.
+
 ## License
 
 See [LICENSE](LICENSE).
